@@ -361,6 +361,29 @@ function isHtmlResponse(text: string): boolean {
   return t.includes("<!doctype") || t.includes("<html");
 }
 
+function classifyGoogleDriveHtml(html: string): "quota_exceeded" | "access_denied" | "confirm_needed" | "unknown" {
+  const lower = html.toLowerCase();
+  if (
+    lower.includes("too many users") ||
+    lower.includes("can't view or download this file at this time") ||
+    lower.includes("quota") ||
+    lower.includes("try again later")
+  ) return "quota_exceeded";
+  if (
+    lower.includes("you need permission") ||
+    lower.includes("request access") ||
+    lower.includes("sign in") ||
+    lower.includes("access denied") ||
+    lower.includes("private")
+  ) return "access_denied";
+  if (
+    html.includes('name="confirm"') ||
+    html.match(/[?&]confirm=([^&"'\s]+)/) ||
+    html.match(/href="[^"]*confirm=[^"]*"/)
+  ) return "confirm_needed";
+  return "unknown";
+}
+
 function extractGoogleDriveFileId(url: string): string | null {
   const patterns = [
     /drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/,
@@ -379,8 +402,20 @@ function isGoogleDriveUrl(url: string): boolean {
   return /drive\.google\.com|docs\.google\.com/.test(url);
 }
 
+function makeGoogleDriveErrorResponse(reason: "quota_exceeded" | "access_denied" | "unknown"): Response {
+  const messages: Record<string, string> = {
+    quota_exceeded: "Google Drive download quota exceeded – too many people have accessed this file recently. Try again later or use a direct hosting service.",
+    access_denied:  "Google Drive file is private or requires login. Make sure the file is shared as 'Anyone with the link'.",
+    unknown:        "Google Drive could not serve the file. Check that it is publicly shared and try again.",
+  };
+  return new Response(new TextEncoder().encode(messages[reason]), {
+    status: 403,
+    headers: { "content-type": "text/plain; charset=utf-8", "x-gdrive-error": reason },
+  });
+}
+
 async function fetchGoogleDriveFile(fileId: string, timeoutMs = 30000): Promise<Response> {
-  const directUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t`;
+  const directUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&authuser=0&confirm=t`;
   const resp = await fetchWithTimeout(directUrl, { redirect: "follow" }, timeoutMs);
 
   if (!resp.ok) return resp;
@@ -389,25 +424,43 @@ async function fetchGoogleDriveFile(fileId: string, timeoutMs = 30000): Promise<
   if (!contentType.includes("text/html")) return resp;
 
   const html = await resp.text();
+  const classification = classifyGoogleDriveHtml(html);
 
-  const confirmMatch = html.match(/name="confirm"\s+value="([^"]+)"/);
-  const uuidMatch    = html.match(/name="uuid"\s+value="([^"]+)"/);
-
-  if (!confirmMatch) {
-    return new Response(new TextEncoder().encode(html), {
-      status: 200,
-      headers: { "content-type": "text/html" },
-    });
+  if (classification === "quota_exceeded" || classification === "access_denied") {
+    return makeGoogleDriveErrorResponse(classification);
   }
 
-  const params = new URLSearchParams({ id: fileId, export: "download", confirm: confirmMatch[1] });
-  if (uuidMatch) params.set("uuid", uuidMatch[1]);
+  if (classification === "confirm_needed") {
+    const confirmInput = html.match(/name="confirm"\s+value="([^"]+)"/);
+    const confirmHref  = html.match(/[?&]confirm=([^&"'\s]+)/);
+    const confirmToken = confirmInput?.[1] ?? confirmHref?.[1] ?? "";
+    const uuidMatch    = html.match(/name="uuid"\s+value="([^"]+)"/);
 
-  return fetchWithTimeout(
-    `https://drive.usercontent.google.com/download?${params.toString()}`,
-    { redirect: "follow" },
-    timeoutMs
-  );
+    if (confirmToken) {
+      const params = new URLSearchParams({ id: fileId, export: "download", confirm: confirmToken });
+      if (uuidMatch) params.set("uuid", uuidMatch[1]);
+      const confirmResp = await fetchWithTimeout(
+        `https://drive.usercontent.google.com/download?${params.toString()}`,
+        { redirect: "follow" },
+        timeoutMs
+      );
+      const ct2 = confirmResp.headers.get("content-type") ?? "";
+      if (confirmResp.ok && !ct2.includes("text/html")) return confirmResp;
+    }
+  }
+
+  // Final fallback: legacy uc endpoint
+  try {
+    const ucResp = await fetchWithTimeout(
+      `https://drive.google.com/uc?export=download&id=${fileId}&authuser=0`,
+      { redirect: "follow" },
+      timeoutMs
+    );
+    const ct3 = ucResp.headers.get("content-type") ?? "";
+    if (ucResp.ok && !ct3.includes("text/html")) return ucResp;
+  } catch { /* ignore fallback failure */ }
+
+  return makeGoogleDriveErrorResponse("unknown");
 }
 
 async function fetchAudioBytes(
@@ -426,6 +479,11 @@ async function fetchAudioBytes(
     }
 
     if (!resp.ok && resp.status !== 206) {
+      const gdriveError = resp.headers.get("x-gdrive-error");
+      if (gdriveError) {
+        const msg = await resp.text().catch(() => `Google Drive error (${gdriveError})`);
+        return { ok: false, error: msg };
+      }
       return { ok: false, error: `Failed to fetch audio (HTTP ${resp.status})` };
     }
 
@@ -433,7 +491,7 @@ async function fetchAudioBytes(
     const bytes  = new Uint8Array(buffer);
     const preview = new TextDecoder("utf-8", { fatal: false }).decode(bytes.slice(0, 64));
     if (isHtmlResponse(preview)) {
-      return { ok: false, error: "Audio URL returned HTML – link may be private or require login" };
+      return { ok: false, error: "Audio URL returned HTML – check that the file is publicly accessible" };
     }
 
     return { ok: true, bytes };
