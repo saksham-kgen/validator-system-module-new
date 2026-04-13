@@ -137,6 +137,14 @@ async function callEdgeFunction(
   }
 }
 
+function convertGoogleDriveUrl(url: string): string {
+  const match = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (match) {
+    return `https://drive.usercontent.google.com/download?id=${match[1]}&export=download&confirm=t`;
+  }
+  return url;
+}
+
 async function callSingleSpeakerEdgeFunction(
   row: SingleSpeakerCsvRow,
   config: ValidationConfig,
@@ -154,7 +162,7 @@ async function callSingleSpeakerEdgeFunction(
         phase: "single_speaker",
         prompt_id: row.prompt_id,
         script: row.script,
-        audio_file: row.audio_file,
+        audio_file: convertGoogleDriveUrl(row.audio_file),
         config: { werThreshold: config.werThreshold, languageCode: config.languageCode },
       }),
     });

@@ -749,57 +749,72 @@ async function transcribeWithElevenLabs(
   if (!audioUrl?.trim()) return { ok: false, error: "Empty audio URL for transcription" };
 
   try {
+    const body: Record<string, unknown> = {
+      model_id: "scribe_v2",
+      diarize: false,
+      url: audioUrl,
+    };
+    if (languageCode?.trim()) body.language_code = languageCode.trim();
+
+    const resp = await fetchWithTimeout(
+      "https://api.elevenlabs.io/v1/speech-to-text",
+      {
+        method: "POST",
+        headers: {
+          "xi-api-key": apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      },
+      60000
+    );
+
+    if (resp.ok) {
+      const result = await resp.json();
+      if (result && typeof result.text === "string" && result.text.trim()) {
+        return { ok: true, text: result.text.trim() };
+      }
+    }
+
     const fetched = await fetchAudioBytes(audioUrl, 30000);
     if (!fetched.ok || !fetched.bytes) {
       return { ok: false, error: fetched.error ?? "Failed to fetch audio for transcription" };
     }
 
     const audioBytes = fetched.bytes;
-
     if (audioBytes.byteLength < 100) {
-      return { ok: false, error: `Audio file too small (${audioBytes.byteLength} bytes) – may not have downloaded correctly` };
+      return { ok: false, error: `Audio file too small (${audioBytes.byteLength} bytes)` };
     }
 
     const { mime, ext } = detectAudioMime(audioBytes);
-
     const form = new FormData();
     form.append("file", new Blob([audioBytes], { type: mime }), `audio.${ext}`);
     form.append("model_id", "scribe_v2");
     form.append("diarize", "false");
     if (languageCode?.trim()) form.append("language_code", languageCode.trim());
 
-    const resp = await fetchWithTimeout(
+    const resp2 = await fetchWithTimeout(
       "https://api.elevenlabs.io/v1/speech-to-text",
-      {
-        method: "POST",
-        headers: { "xi-api-key": apiKey },
-        body: form,
-      },
+      { method: "POST", headers: { "xi-api-key": apiKey }, body: form },
       60000
     );
 
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => "");
-      return { ok: false, error: `ElevenLabs API error (HTTP ${resp.status}): ${errText.slice(0, 200)}` };
+    if (!resp2.ok) {
+      const errText = await resp2.text().catch(() => "");
+      return { ok: false, error: `ElevenLabs API error (HTTP ${resp2.status}): ${errText.slice(0, 200)}` };
     }
 
-    const result = await resp.json();
-
-    // Prioritize top-level text field (matches Python reference implementation)
-    if (result && typeof result === "object" && typeof result.text === "string" && result.text.trim()) {
-      return { ok: true, text: result.text.trim() };
+    const result2 = await resp2.json();
+    if (result2 && typeof result2.text === "string" && result2.text.trim()) {
+      return { ok: true, text: result2.text.trim() };
     }
 
-    // Fallback: reconstruct from words array
     let words: Array<{ text?: string }> = [];
-    if (Array.isArray(result)) {
-      words = result;
-    } else if (result && typeof result === "object" && Array.isArray(result.words)) {
-      words = result.words;
-    }
-
+    if (Array.isArray(result2)) words = result2;
+    else if (result2 && Array.isArray(result2.words)) words = result2.words;
     const text = words.map((w) => (typeof w === "object" ? w.text ?? "" : "")).join(" ").trim();
     return { ok: true, text };
+
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: msg.includes("aborted") ? "ElevenLabs request timed out" : `ElevenLabs fetch error: ${msg}` };
