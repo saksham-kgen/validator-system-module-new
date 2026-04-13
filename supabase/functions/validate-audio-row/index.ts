@@ -450,14 +450,18 @@ async function fetchGoogleDriveFile(fileId: string, timeoutMs = 30000): Promise<
   }
 
   if (classification === "confirm_needed") {
-    const confirmInput = html.match(/name="confirm"\s+value="([^"]+)"/);
-    const confirmHref  = html.match(/[?&]confirm=([^&"'\s]+)/);
-    const confirmToken = confirmInput?.[1] ?? confirmHref?.[1] ?? "";
-    const uuidMatch    = html.match(/name="uuid"\s+value="([^"]+)"/);
+    const confirmInput   = html.match(/name="confirm"\s+value="([^"]+)"/);
+    const formActionHref = html.match(/action="([^"]*confirm=[^"]+)"/);
+    const confirmHref    = html.match(/[?&]confirm=([^&"'\s]+)/);
+    const confirmToken   = confirmInput?.[1] ?? (formActionHref ? (new URLSearchParams(formActionHref[1].split("?")[1] ?? "")).get("confirm") ?? "" : "") ?? confirmHref?.[1] ?? "";
+    const uuidInputMatch = html.match(/name="uuid"\s+value="([^"]+)"/);
+    const uuidActionMatch = formActionHref ? (new URLSearchParams(formActionHref[1].split("?")[1] ?? "")).get("uuid") ?? "" : "";
+    const uuid = uuidInputMatch?.[1] ?? uuidActionMatch ?? "";
 
-    if (confirmToken) {
-      const params = new URLSearchParams({ id: fileId, export: "download", confirm: confirmToken });
-      if (uuidMatch) params.set("uuid", uuidMatch[1]);
+    const token = confirmToken || "t";
+    const params = new URLSearchParams({ id: fileId, export: "download", confirm: token });
+    if (uuid) params.set("uuid", uuid);
+    try {
       const confirmResp = await fetchWithTimeout(
         `https://drive.usercontent.google.com/download?${params.toString()}`,
         { redirect: "follow" },
@@ -465,13 +469,13 @@ async function fetchGoogleDriveFile(fileId: string, timeoutMs = 30000): Promise<
       );
       const ct2 = confirmResp.headers.get("content-type") ?? "";
       if (confirmResp.ok && !ct2.includes("text/html")) return confirmResp;
-    }
+    } catch { /* ignore confirm attempt failure */ }
   }
 
-  // Final fallback: legacy uc endpoint
+  // Final fallback: legacy uc endpoint with confirm token
   try {
     const ucResp = await fetchWithTimeout(
-      `https://drive.google.com/uc?export=download&id=${fileId}&authuser=0`,
+      `https://drive.google.com/uc?export=download&id=${fileId}&authuser=0&confirm=t`,
       { redirect: "follow" },
       timeoutMs
     );
