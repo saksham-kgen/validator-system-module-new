@@ -363,12 +363,35 @@ function isHtmlResponse(text: string): boolean {
 
 function classifyGoogleDriveHtml(html: string): "quota_exceeded" | "access_denied" | "confirm_needed" | "unknown" {
   const lower = html.toLowerCase();
+
+  // Check for virus scan warning / large-file confirmation page FIRST.
+  // This page contains a download form and must be handled as confirm_needed,
+  // not confused with quota errors (both pages may share some generic text).
   if (
+    lower.includes("uc-warning-caption") ||
+    lower.includes("uc-warning-subcaption") ||
+    lower.includes("virus scan warning") ||
+    lower.includes("google drive can") && lower.includes("scan this file for viruses") ||
+    lower.includes("too large for google to scan") ||
+    lower.includes("download anyway") ||
+    html.includes('id="downloadForm"') ||
+    html.includes('id="uc-download-link"') ||
+    html.includes('name="confirm"') ||
+    html.match(/[?&]confirm=([^&"'\s]+)/) !== null ||
+    html.match(/href="[^"]*confirm=[^"]*"/) !== null
+  ) return "confirm_needed";
+
+  // Quota exceeded — use precise CSS class names Google Drive actually uses,
+  // not broad keywords like "quota" that appear on other pages too.
+  if (
+    lower.includes("uc-error-caption") ||
+    lower.includes("uc-error-subcaption") ||
+    lower.includes("google drive - quota exceeded") ||
+    lower.includes("too many users have viewed or downloaded") ||
     lower.includes("too many users") ||
-    lower.includes("can't view or download this file at this time") ||
-    lower.includes("quota") ||
-    lower.includes("try again later")
+    lower.includes("can't view or download this file at this time")
   ) return "quota_exceeded";
+
   if (
     lower.includes("you need permission") ||
     lower.includes("request access") ||
@@ -376,11 +399,7 @@ function classifyGoogleDriveHtml(html: string): "quota_exceeded" | "access_denie
     lower.includes("access denied") ||
     lower.includes("private")
   ) return "access_denied";
-  if (
-    html.includes('name="confirm"') ||
-    html.match(/[?&]confirm=([^&"'\s]+)/) ||
-    html.match(/href="[^"]*confirm=[^"]*"/)
-  ) return "confirm_needed";
+
   return "unknown";
 }
 
