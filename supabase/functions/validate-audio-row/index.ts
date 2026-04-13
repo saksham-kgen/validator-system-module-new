@@ -434,54 +434,110 @@ function makeGoogleDriveErrorResponse(reason: "quota_exceeded" | "access_denied"
 }
 
 async function fetchGoogleDriveFile(fileId: string, timeoutMs = 30000): Promise<Response> {
-  const directUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&authuser=0&confirm=t`;
-  const resp = await fetchWithTimeout(directUrl, { redirect: "follow" }, timeoutMs);
+  const browserHeaders = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://drive.google.com/",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  };
 
-  if (!resp.ok) return resp;
-
-  const contentType = resp.headers.get("content-type") ?? "";
-  if (!contentType.includes("text/html")) return resp;
-
-  const html = await resp.text();
-  const classification = classifyGoogleDriveHtml(html);
-
-  if (classification === "quota_exceeded" || classification === "access_denied") {
-    return makeGoogleDriveErrorResponse(classification);
-  }
-
-  if (classification === "confirm_needed") {
-    const confirmInput   = html.match(/name="confirm"\s+value="([^"]+)"/);
-    const formActionHref = html.match(/action="([^"]*confirm=[^"]+)"/);
-    const confirmHref    = html.match(/[?&]confirm=([^&"'\s]+)/);
-    const confirmToken   = confirmInput?.[1] ?? (formActionHref ? (new URLSearchParams(formActionHref[1].split("?")[1] ?? "")).get("confirm") ?? "" : "") ?? confirmHref?.[1] ?? "";
-    const uuidInputMatch = html.match(/name="uuid"\s+value="([^"]+)"/);
-    const uuidActionMatch = formActionHref ? (new URLSearchParams(formActionHref[1].split("?")[1] ?? "")).get("uuid") ?? "" : "";
-    const uuid = uuidInputMatch?.[1] ?? uuidActionMatch ?? "";
-
-    const token = confirmToken || "t";
-    const params = new URLSearchParams({ id: fileId, export: "download", confirm: token });
-    if (uuid) params.set("uuid", uuid);
-    try {
-      const confirmResp = await fetchWithTimeout(
-        `https://drive.usercontent.google.com/download?${params.toString()}`,
-        { redirect: "follow" },
-        timeoutMs
-      );
-      const ct2 = confirmResp.headers.get("content-type") ?? "";
-      if (confirmResp.ok && !ct2.includes("text/html")) return confirmResp;
-    } catch { /* ignore confirm attempt failure */ }
-  }
-
-  // Final fallback: legacy uc endpoint with confirm token
+  // Attempt 1: usercontent direct download with browser headers
+  const usercontent = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&authuser=0&confirm=t`;
   try {
-    const ucResp = await fetchWithTimeout(
-      `https://drive.google.com/uc?export=download&id=${fileId}&authuser=0&confirm=t`,
-      { redirect: "follow" },
+    const resp1 = await fetchWithTimeout(usercontent, { redirect: "follow", headers: browserHeaders }, timeoutMs);
+    if (resp1.ok) {
+      const ct = resp1.headers.get("content-type") ?? "";
+      if (!ct.includes("text/html")) return resp1;
+
+      const html = await resp1.text();
+      const cls = classifyGoogleDriveHtml(html);
+      if (cls === "quota_exceeded") return makeGoogleDriveErrorResponse("quota_exceeded");
+      if (cls === "access_denied")  return makeGoogleDriveErrorResponse("access_denied");
+
+      if (cls === "confirm_needed") {
+        const tokenMatches = [
+          html.match(/name=["']confirm["']\s+value=["']([^"']+)["']/),
+          html.match(/value=["']([^"']+)["']\s+name=["']confirm["']/),
+          html.match(/[?&]confirm=([^&"'\s]+)/),
+          html.match(/confirm=([A-Za-z0-9_-]+)/),
+        ];
+        const token = tokenMatches.find(m => m)?.[1] ?? "t";
+        const uuidMatch = html.match(/name=["']uuid["']\s+value=["']([^"']+)["']/) ??
+                          html.match(/value=["']([^"']+)["']\s+name=["']uuid["']/);
+        const uuid = uuidMatch?.[1] ?? "";
+
+        const params = new URLSearchParams({ id: fileId, export: "download", confirm: token });
+        if (uuid) params.set("uuid", uuid);
+
+        try {
+          const resp2 = await fetchWithTimeout(
+            `https://drive.usercontent.google.com/download?${params}`,
+            { redirect: "follow", headers: browserHeaders },
+            timeoutMs
+          );
+          if (resp2.ok) {
+            const ct2 = resp2.headers.get("content-type") ?? "";
+            if (!ct2.includes("text/html")) return resp2;
+          }
+        } catch { /* fall through */ }
+      }
+    }
+  } catch { /* fall through */ }
+
+  // Attempt 2: legacy uc endpoint with browser headers
+  const ucUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`;
+  try {
+    const resp3 = await fetchWithTimeout(ucUrl, { redirect: "follow", headers: browserHeaders }, timeoutMs);
+    if (resp3.ok) {
+      const ct3 = resp3.headers.get("content-type") ?? "";
+      if (!ct3.includes("text/html")) return resp3;
+
+      const html3 = await resp3.text();
+      const cls3 = classifyGoogleDriveHtml(html3);
+      if (cls3 === "quota_exceeded") return makeGoogleDriveErrorResponse("quota_exceeded");
+      if (cls3 === "access_denied")  return makeGoogleDriveErrorResponse("access_denied");
+
+      if (cls3 === "confirm_needed") {
+        const tokenMatches3 = [
+          html3.match(/name=["']confirm["']\s+value=["']([^"']+)["']/),
+          html3.match(/value=["']([^"']+)["']\s+name=["']confirm["']/),
+          html3.match(/[?&]confirm=([^&"'\s]+)/),
+          html3.match(/confirm=([A-Za-z0-9_-]+)/),
+        ];
+        const token3 = tokenMatches3.find(m => m)?.[1] ?? "t";
+        const uuidMatch3 = html3.match(/name=["']uuid["']\s+value=["']([^"']+)["']/) ??
+                           html3.match(/value=["']([^"']+)["']\s+name=["']uuid["']/);
+        const uuid3 = uuidMatch3?.[1] ?? "";
+
+        const params3 = new URLSearchParams({ id: fileId, export: "download", confirm: token3 });
+        if (uuid3) params3.set("uuid", uuid3);
+
+        try {
+          const resp4 = await fetchWithTimeout(
+            `https://drive.usercontent.google.com/download?${params3}`,
+            { redirect: "follow", headers: browserHeaders },
+            timeoutMs
+          );
+          if (resp4.ok) {
+            const ct4 = resp4.headers.get("content-type") ?? "";
+            if (!ct4.includes("text/html")) return resp4;
+          }
+        } catch { /* fall through */ }
+      }
+    }
+  } catch { /* fall through */ }
+
+  // Attempt 3: googleapis direct media (works for some public files without needing confirm)
+  try {
+    const resp5 = await fetchWithTimeout(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+      { redirect: "follow", headers: browserHeaders },
       timeoutMs
     );
-    const ct3 = ucResp.headers.get("content-type") ?? "";
-    if (ucResp.ok && !ct3.includes("text/html")) return ucResp;
-  } catch { /* ignore fallback failure */ }
+    if (resp5.ok) {
+      const ct5 = resp5.headers.get("content-type") ?? "";
+      if (!ct5.includes("text/html")) return resp5;
+    }
+  } catch { /* fall through */ }
 
   return makeGoogleDriveErrorResponse("unknown");
 }
