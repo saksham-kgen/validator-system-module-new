@@ -547,22 +547,77 @@ async function fetchAudioBytes(
   timeoutMs = 30000
 ): Promise<{ ok: boolean; bytes?: Uint8Array; error?: string }> {
   try {
-    let resp: Response;
-
     if (isGoogleDriveUrl(url)) {
       const fileId = extractGoogleDriveFileId(url);
       if (!fileId) return { ok: false, error: "Could not extract file ID from Google Drive URL" };
-      resp = await fetchGoogleDriveFile(fileId, timeoutMs);
-    } else {
-      resp = await fetchWithTimeout(url, { redirect: "follow" }, timeoutMs);
+
+      const candidates = [
+        `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t&authuser=0`,
+        `https://drive.usercontent.google.com/uc?id=${fileId}&export=download&confirm=t`,
+        `https://drive.google.com/uc?id=${fileId}&export=download&confirm=t&authuser=0`,
+      ];
+
+      let lastError = "";
+      for (const candidate of candidates) {
+        try {
+          const r = await fetchWithTimeout(candidate, {
+            redirect: "follow",
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              "Referer": "https://drive.google.com/",
+              "Accept": "*/*",
+              "Accept-Language": "en-US,en;q=0.9",
+              "Cache-Control": "no-cache",
+            },
+          }, timeoutMs);
+
+          if (!r.ok) { lastError = `HTTP ${r.status}`; continue; }
+
+          const reader = r.body?.getReader();
+          if (!reader) { lastError = "No response body"; continue; }
+
+          const chunks: Uint8Array[] = [];
+          let totalBytes = 0;
+          let isHtml = false;
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            totalBytes += value.length;
+
+            if (chunks.length === 1) {
+              const preview = new TextDecoder("utf-8", { fatal: false }).decode(value.slice(0, 64));
+              if (isHtmlResponse(preview)) {
+                isHtml = true;
+                reader.cancel();
+                break;
+              }
+            }
+          }
+
+          if (isHtml) { lastError = "Got HTML response"; continue; }
+
+          const combined = new Uint8Array(totalBytes);
+          let offset = 0;
+          for (const chunk of chunks) {
+            combined.set(chunk, offset);
+            offset += chunk.length;
+          }
+
+          return { ok: true, bytes: combined };
+        } catch (e) {
+          lastError = e instanceof Error ? e.message : String(e);
+          continue;
+        }
+      }
+
+      return { ok: false, error: `All Google Drive download attempts failed. Last error: ${lastError}. The file may require login despite appearing public (this happens with links shared from the Google Drive mobile app using 'usp=drivesdk').` };
     }
 
+    const resp = await fetchWithTimeout(url, { redirect: "follow" }, timeoutMs);
+
     if (!resp.ok && resp.status !== 206) {
-      const gdriveError = resp.headers.get("x-gdrive-error");
-      if (gdriveError) {
-        const msg = await resp.text().catch(() => `Google Drive error (${gdriveError})`);
-        return { ok: false, error: msg };
-      }
       return { ok: false, error: `Failed to fetch audio (HTTP ${resp.status})` };
     }
 

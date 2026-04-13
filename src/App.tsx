@@ -74,6 +74,11 @@ async function callEdgeFunction(
   anonKey: string
 ): Promise<PhaseResult> {
   try {
+    const [speakerA, speakerB, combined] = await Promise.all([
+      resolveGoogleDriveUrl(row.speaker_A_audio),
+      resolveGoogleDriveUrl(row.speaker_B_audio),
+      resolveGoogleDriveUrl(row.combined_audio),
+    ]);
     const res = await fetch(EDGE_FUNCTION_URL, {
       method: "POST",
       headers: {
@@ -84,9 +89,9 @@ async function callEdgeFunction(
       body: JSON.stringify({
         phase,
         audio_id: row.audio_id,
-        speaker_A_audio: row.speaker_A_audio,
-        speaker_B_audio: row.speaker_B_audio,
-        combined_audio: row.combined_audio,
+        speaker_A_audio: speakerA,
+        speaker_B_audio: speakerB,
+        combined_audio: combined,
         transcription: row.transcription,
         config: {
           minDurationSec: config.minDurationSec,
@@ -137,12 +142,11 @@ async function callEdgeFunction(
   }
 }
 
-function convertGoogleDriveUrl(url: string): string {
+async function resolveGoogleDriveUrl(url: string): Promise<string> {
   const match = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
-  if (match) {
-    return `https://drive.usercontent.google.com/download?id=${match[1]}&export=download&confirm=t`;
-  }
-  return url;
+  if (!match) return url;
+  const fileId = match[1];
+  return `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t&authuser=0`;
 }
 
 async function callSingleSpeakerEdgeFunction(
@@ -151,6 +155,7 @@ async function callSingleSpeakerEdgeFunction(
   anonKey: string
 ): Promise<{ wer: number | null; status: "Pass" | "Fail" | "Skipped"; asr_transcript: string | null; error?: string }> {
   try {
+    const audioFile = await resolveGoogleDriveUrl(row.audio_file);
     const res = await fetch(EDGE_FUNCTION_URL, {
       method: "POST",
       headers: {
@@ -162,7 +167,7 @@ async function callSingleSpeakerEdgeFunction(
         phase: "single_speaker",
         prompt_id: row.prompt_id,
         script: row.script,
-        audio_file: convertGoogleDriveUrl(row.audio_file),
+        audio_file: audioFile,
         config: { werThreshold: config.werThreshold, languageCode: config.languageCode },
       }),
     });
