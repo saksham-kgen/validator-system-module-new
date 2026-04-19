@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Shield, Activity, CheckCircle2, XCircle, Loader2, Clock, Info } from "lucide-react";
+import { Shield, Activity, CheckCircle2, XCircle, Loader2, Clock, Info, MinusCircle } from "lucide-react";
 import { RowResult, AppStep } from "../lib/types";
 import RowDetailsModal from "./RowDetailsModal";
 
@@ -43,12 +43,19 @@ function StatusBadge({ status }: { status: string }) {
 export default function ProcessingView({ rows, currentStep, totalRows }: Props) {
   const [selectedRow, setSelectedRow] = useState<RowResult | null>(null);
 
-  const processedStructural = rows.filter((r) => r.structural_check === "Pass" || r.structural_check === "Fail").length;
-  const structuralProgress  = totalRows > 0 ? (processedStructural / totalRows) * 100 : 0;
+  const processedStructural  = rows.filter((r) => r.structural_check === "Pass" || r.structural_check === "Fail").length;
+  const structuralPassed     = rows.filter((r) => r.structural_check === "Pass").length;
+  const structuralFailed     = rows.filter((r) => r.structural_check === "Fail").length;
+  const structuralProcessing = rows.filter((r) => (r.structural_check as string) === "Processing").length;
+  const structuralProgress   = totalRows > 0 ? (processedStructural / totalRows) * 100 : 0;
 
-  const accuracyEligible = rows.filter((r) => r.structural_check === "Pass").length;
-  const accuracyDone     = rows.filter((r) => r.accuracy_status === "Pass" || r.accuracy_status === "Fail" || r.accuracy_status === "Skipped").length;
-  const accuracyProgress = accuracyEligible > 0 ? (accuracyDone / accuracyEligible) * 100 : 0;
+  const accuracyEligible   = rows.filter((r) => r.structural_check === "Pass").length;
+  const accuracyDone       = rows.filter((r) => r.accuracy_status === "Pass" || r.accuracy_status === "Fail" || r.accuracy_status === "Skipped").length;
+  const accuracyPassed     = rows.filter((r) => r.accuracy_status === "Pass").length;
+  const accuracyFailed     = rows.filter((r) => r.accuracy_status === "Fail").length;
+  const accuracySkipped    = rows.filter((r) => r.accuracy_status === "Skipped").length;
+  const accuracyProcessing = rows.filter((r) => (r.accuracy_status as string) === "Processing").length;
+  const accuracyProgress   = accuracyEligible > 0 ? (accuracyDone / accuracyEligible) * 100 : 0;
 
   return (
     <div className="space-y-6">
@@ -69,6 +76,11 @@ export default function ProcessingView({ rows, currentStep, totalRows }: Props) 
           <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
             <div className="h-full bg-blue-500 rounded-full transition-all duration-500" style={{ width: `${structuralProgress}%` }} />
           </div>
+          <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
+            <span className="flex items-center gap-1"><Loader2 size={10} className="animate-spin text-blue-500" />{structuralProcessing} processing</span>
+            <span className="flex items-center gap-1"><CheckCircle2 size={10} className="text-emerald-500" />{structuralPassed} passed</span>
+            <span className="flex items-center gap-1"><XCircle size={10} className="text-red-500" />{structuralFailed} failed</span>
+          </div>
         </div>
 
         <div className={`rounded-2xl p-4 border transition-all ${accuracyEligible > 0 ? "border-amber-200 bg-amber-50/50" : "border-gray-200 bg-white"}`}>
@@ -88,6 +100,12 @@ export default function ProcessingView({ rows, currentStep, totalRows }: Props) 
           </div>
           <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
             <div className="h-full bg-amber-500 rounded-full transition-all duration-500" style={{ width: `${accuracyProgress}%` }} />
+          </div>
+          <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
+            <span className="flex items-center gap-1"><Loader2 size={10} className="animate-spin text-amber-500" />{accuracyProcessing} processing</span>
+            <span className="flex items-center gap-1"><CheckCircle2 size={10} className="text-emerald-500" />{accuracyPassed} passed</span>
+            <span className="flex items-center gap-1"><XCircle size={10} className="text-red-500" />{accuracyFailed} failed</span>
+            <span className="flex items-center gap-1"><MinusCircle size={10} className="text-gray-400" />{accuracySkipped} skipped</span>
           </div>
         </div>
       </div>

@@ -1,4 +1,4 @@
-import { CheckCircle2, XCircle, Loader2, Clock } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, Clock, MinusCircle } from "lucide-react";
 import { SingleSpeakerResult } from "../lib/types";
 
 interface Props {
@@ -9,7 +9,9 @@ interface Props {
 export default function SingleSpeakerProcessingView({ rows, totalRows }: Props) {
   const done = rows.filter((r) => r.status !== "Pending" && r.status !== "Processing").length;
   const processing = rows.filter((r) => r.status === "Processing").length;
+  const passed = rows.filter((r) => r.status === "Pass").length;
   const failed = rows.filter((r) => r.status === "Fail").length;
+  const skipped = rows.filter((r) => r.status === "Skipped").length;
   const pct = totalRows > 0 ? Math.round((done / totalRows) * 100) : 0;
 
   return (
@@ -27,8 +29,9 @@ export default function SingleSpeakerProcessingView({ rows, totalRows }: Props) 
         </div>
         <div className="flex items-center gap-4 text-xs text-gray-500">
           <span className="flex items-center gap-1"><Loader2 size={11} className="animate-spin text-blue-500" />{processing} processing</span>
-          <span className="flex items-center gap-1"><CheckCircle2 size={11} className="text-emerald-500" />{done - failed} passed</span>
+          <span className="flex items-center gap-1"><CheckCircle2 size={11} className="text-emerald-500" />{passed} passed</span>
           <span className="flex items-center gap-1"><XCircle size={11} className="text-red-500" />{failed} failed</span>
+          <span className="flex items-center gap-1"><MinusCircle size={11} className="text-gray-400" />{skipped} skipped</span>
         </div>
       </div>
 
