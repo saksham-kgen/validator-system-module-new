@@ -67,12 +67,27 @@ type PhaseResult = {
   asr_transcript_b?: string;
 };
 
+const EDGE_TIMEOUT_MS = 180_000;
+
+function describeNetworkError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (err instanceof Error && err.name === "AbortError") {
+    return "Request timed out (edge function took too long). This usually happens when a Google Drive audio file is slow to serve. Check that all URLs are publicly accessible.";
+  }
+  if (msg.toLowerCase().includes("failed to fetch")) {
+    return "Failed to reach the validation service. This is often caused by: (1) the edge function crashed before returning a response, (2) a CORS issue due to an error response without headers, or (3) a network interruption. Check the browser console (Network tab) for the actual HTTP status code.";
+  }
+  return msg;
+}
+
 async function callEdgeFunction(
   phase: "structural" | "accuracy",
   row: CsvRow,
   config: ValidationConfig,
   anonKey: string
 ): Promise<PhaseResult> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), EDGE_TIMEOUT_MS);
   try {
     const [speakerA, speakerB, combined] = await Promise.all([
       resolveGoogleDriveUrl(row.speaker_A_audio),
@@ -81,6 +96,7 @@ async function callEdgeFunction(
     ]);
     const res = await fetch(EDGE_FUNCTION_URL, {
       method: "POST",
+      signal: ctrl.signal,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${anonKey}`,
@@ -103,10 +119,15 @@ async function callEdgeFunction(
     });
 
     if (!res.ok) {
-      const errText = await res.text().catch(() => "Unknown error");
+      const errText = await res.text().catch(() => "");
+      let detail = errText.slice(0, 300);
+      try {
+        const parsed = JSON.parse(errText);
+        if (parsed?.error) detail = parsed.error;
+      } catch { /* not JSON */ }
       return {
         structural_check: "Fail",
-        structural_errors: [`Validation service error (HTTP ${res.status}): ${errText}`],
+        structural_errors: [`Validation service error (HTTP ${res.status}): ${detail || "No details returned"}`],
         accuracy_wer: null,
         accuracy_wer_speaker_a: null,
         accuracy_wer_speaker_b: null,
@@ -130,15 +151,17 @@ async function callEdgeFunction(
       asr_transcript_b:       data.asr_transcript_b,
     };
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = describeNetworkError(err);
     return {
       structural_check: "Fail",
-      structural_errors: [`Network error: ${msg}`],
+      structural_errors: [msg],
       accuracy_wer: null,
       accuracy_wer_speaker_a: null,
       accuracy_wer_speaker_b: null,
       accuracy_status: "Pending",
     };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -154,10 +177,13 @@ async function callSingleSpeakerEdgeFunction(
   config: ValidationConfig,
   anonKey: string
 ): Promise<{ wer: number | null; status: "Pass" | "Fail" | "Skipped"; asr_transcript: string | null; error?: string }> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), EDGE_TIMEOUT_MS);
   try {
     const audioFile = await resolveGoogleDriveUrl(row.audio_file);
     const res = await fetch(EDGE_FUNCTION_URL, {
       method: "POST",
+      signal: ctrl.signal,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${anonKey}`,
@@ -173,8 +199,13 @@ async function callSingleSpeakerEdgeFunction(
     });
 
     if (!res.ok) {
-      const errText = await res.text().catch(() => "Unknown error");
-      return { wer: null, status: "Skipped", asr_transcript: null, error: `Service error (HTTP ${res.status}): ${errText}` };
+      const errText = await res.text().catch(() => "");
+      let detail = errText.slice(0, 300);
+      try {
+        const parsed = JSON.parse(errText);
+        if (parsed?.error) detail = parsed.error;
+      } catch { /* not JSON */ }
+      return { wer: null, status: "Skipped", asr_transcript: null, error: `Service error (HTTP ${res.status}): ${detail || "No details returned"}` };
     }
 
     const data = await res.json();
@@ -185,8 +216,9 @@ async function callSingleSpeakerEdgeFunction(
       error:          data.error,
     };
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { wer: null, status: "Skipped", asr_transcript: null, error: `Network error: ${msg}` };
+    return { wer: null, status: "Skipped", asr_transcript: null, error: describeNetworkError(err) };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

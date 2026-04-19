@@ -1070,10 +1070,32 @@ async function handleSingleSpeaker(body: RowInput): Promise<SingleSpeakerResult>
 // =============================================================================
 
 Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response(null, { status: 200, headers: corsHeaders });
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 200, headers: corsHeaders });
+  }
+
+  const respond = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+
+  let rawBody = "";
+  try {
+    rawBody = await req.text();
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return respond({ error: `Failed to read request body: ${message}` }, 400);
+  }
+
+  let body: RowInput;
+  try {
+    body = JSON.parse(rawBody) as RowInput;
+  } catch {
+    return respond({ error: "Request body is not valid JSON" }, 400);
+  }
 
   try {
-    const body: RowInput = await req.json();
     const phase = body.phase ?? "structural";
 
     let result;
@@ -1085,14 +1107,9 @@ Deno.serve(async (req: Request) => {
       result = await handleStructural(body);
     }
 
-    return new Response(JSON.stringify(result), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return respond(result);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    return new Response(JSON.stringify({ error: message }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return respond({ error: message }, 500);
   }
 });
